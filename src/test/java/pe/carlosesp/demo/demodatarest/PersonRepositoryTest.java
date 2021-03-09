@@ -19,6 +19,7 @@ import pe.carlosesp.demo.demodatarest.domain.Person;
 import pe.carlosesp.demo.demodatarest.repository.PersonRepository;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 
@@ -28,8 +29,7 @@ import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.endsWith;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasSize;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -67,7 +67,6 @@ public class PersonRepositoryTest {
     @Test
     public void getAllPeople() throws Exception {
         this.mockMvc.perform(get("/people"))
-                .andDo(print())
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
                 .andExpect(jsonPath("_embedded").exists())
@@ -86,7 +85,6 @@ public class PersonRepositoryTest {
     public void getPersonById() throws Exception {
         Person expectedPerson = personList.get(0);
         this.mockMvc.perform(get("/people/{id}", expectedPerson.getId()))
-                .andDo(print())
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
                 .andExpect(jsonPath("$").exists())
@@ -97,8 +95,7 @@ public class PersonRepositoryTest {
                         hasItems(endsWith("/people/" + expectedPerson.getId()))));
     }
     @Test
-    public void getPersonSelfLink() {
-        System.out.println("getPersonSelfLink...");
+    public void getPersonThroughSelfLink() {
         Person expectedPerson = personList.get(0);
         String baseUrl = "http://localhost:" + this.port + "/people/" + expectedPerson.getId();
 
@@ -109,7 +106,6 @@ public class PersonRepositoryTest {
         assertThat(personModel).isNotNull();
         assertThat(expectedPerson.getFirstName()).isEqualTo(personModel.getFirstName());
         assertThat(expectedPerson.getLastName()).isEqualTo(personModel.getLastName());
-        System.out.println("...getPersonSelfLink");
     }
 
     @Test
@@ -120,7 +116,6 @@ public class PersonRepositoryTest {
         MvcResult mvcResult = this.mockMvc.perform(post("/people")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
-                .andDo(print())
                 .andExpect(status().isCreated())
                 .andExpect(header().exists("Location"))
                 .andExpect(header().string("Location", containsString("/people/")))
@@ -138,8 +133,7 @@ public class PersonRepositoryTest {
         assertThat(personCreated.get().getFirstName()).isEqualTo(newPerson.getFirstName());
         assertThat(personCreated.get().getLastName()).isEqualTo(newPerson.getLastName());
 
-        this.mockMvc.perform(get("/people/" + personId))
-                .andDo(print())
+        this.mockMvc.perform(get("/people/{id}", personId))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
                 .andExpect(jsonPath("$").exists())
@@ -151,7 +145,6 @@ public class PersonRepositoryTest {
     @Test
     public void findCustomQueries() throws Exception {
         this.mockMvc.perform(get("/people/search"))
-                .andDo(print())
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
                 .andExpect(jsonPath("_links").exists())
@@ -163,7 +156,6 @@ public class PersonRepositoryTest {
         Person expectedPerson = personList.get(0);
         this.mockMvc.perform(get("/people/search/findByLastName")
                 .param("name", expectedPerson.getLastName()))
-                .andDo(print())
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
                 .andExpect(jsonPath("_embedded").exists())
@@ -173,6 +165,86 @@ public class PersonRepositoryTest {
                 .andExpect(jsonPath("_embedded.people[0]._links").exists())
                 .andExpect(jsonPath("_embedded.people[0]._links.self.href",
                         endsWith("/people/" + expectedPerson.getId())));
+    }
+
+    @Test
+    public void replacePerson() throws Exception {
+        Person originalPerson = personList.get(0);
+        Person newPerson = new Person("John", "Smith");
+        String body = this.objectMapper.writeValueAsString(newPerson);
+        System.out.println(body);
+        MvcResult mvcResult = this.mockMvc.perform(put("/people/{id}", originalPerson.getId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body)
+                .characterEncoding(StandardCharsets.UTF_8.name()))
+                .andExpect(status().isNoContent())
+                .andExpect(header().exists("Location"))
+                .andExpect(header().string("Location", endsWith("/people/" + originalPerson.getId())))
+                .andExpect(jsonPath("$").doesNotExist())
+                .andExpect(redirectedUrlPattern("http://*/people/" + originalPerson.getId()))
+                .andReturn();
+
+        String location = mvcResult.getResponse().getHeader("Location");
+        assertThat(location).isNotNull();
+        String personId = location.substring(location.lastIndexOf("/") + 1);
+        assertThat(personId).isNotNull();
+        assertThat(Long.valueOf(personId)).isEqualTo(originalPerson.getId());
+
+        this.mockMvc.perform(get("/people/{id}", personId))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
+                .andExpect(jsonPath("$").exists())
+                .andExpect(jsonPath("firstName").value(newPerson.getFirstName()))
+                .andExpect(jsonPath("lastName").value(newPerson.getLastName()))
+                .andExpect(jsonPath("_links.self.href").value(location));
+    }
+
+    @Test
+    public void updatePerson() throws Exception {
+        Person originalPerson = personList.get(0);
+        String updatedFirstName = "Martin Jr.";
+        this.mockMvc.perform(patch("/people/{id}", originalPerson.getId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"firstName\": \"" + updatedFirstName + "\"}")
+                .characterEncoding(StandardCharsets.UTF_8.name()))
+                .andExpect(status().isNoContent())
+                .andExpect(header().doesNotExist("Location"))
+                .andExpect(jsonPath("$").doesNotExist());
+
+        this.mockMvc.perform(get("/people/{id}", originalPerson.getId()))
+                .andDo(print())
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
+                .andExpect(jsonPath("$").exists())
+                .andExpect(jsonPath("firstName").value(updatedFirstName))
+                .andExpect(jsonPath("lastName").value(originalPerson.getLastName()))
+                .andExpect(jsonPath("_links.self.href",
+                        containsString("/people/" + originalPerson.getId())));
+    }
+
+    @Test
+    public void deletePerson() throws Exception {
+        this.mockMvc.perform(get("/people"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON_VALUE))
+                .andExpect(jsonPath("_embedded").exists())
+                .andExpect(jsonPath("_embedded.people", hasSize(3)))
+                .andExpect(jsonPath("_embedded.people[*].firstName",
+                        hasItems(personList.stream().map(Person::getFirstName).toArray())))
+                .andExpect(jsonPath("_embedded.people[*].lastName",
+                        hasItems(personList.stream().map(Person::getLastName).toArray())))
+                .andExpect(jsonPath("page").exists())
+                .andExpect(jsonPath("page.totalElements").value(3));
+
+        Person deletedPerson = personList.get(0);
+        this.mockMvc.perform(delete("/people/{id}", deletedPerson.getId()))
+                .andExpect(status().isNoContent())
+                .andExpect(header().doesNotExist("Location"))
+                .andExpect(jsonPath("$").doesNotExist());
+
+        this.mockMvc.perform(get("/people/{id}", deletedPerson.getId()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$").doesNotExist());
     }
 
 }
